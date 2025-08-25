@@ -87,7 +87,7 @@ async def parse_sse(jwt_token:str,snowflake_account:str,request:ChatRequest,sess
                 if _sql:
                     yield construct_sse(
                         event = 'markdown',
-                        data = 'Interating with database'
+                        data = 'Searching the database'
                     )
                     try:
                         df = await asyncio.wait_for(execute_sql_async(_sql, session), timeout=settings.SQL_TIMEOUT_SEC)
@@ -106,7 +106,7 @@ async def parse_sse(jwt_token:str,snowflake_account:str,request:ChatRequest,sess
                     if isinstance(df, pd.DataFrame) and not df.empty:
                         yield construct_sse(
                             event = 'markdown',
-                            data = 'Analyzing the data'
+                            data = 'Crafting a response'
                         )
                         sql_prompt = create_prompt_summarize_cortex_analyst_results(prompt, df, _sql)
                         try:

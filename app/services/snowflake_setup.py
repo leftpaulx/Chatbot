@@ -8,7 +8,7 @@ import time
 _JWT_LOCK = asyncio.Lock()
 _JWT = {'token': None, 'exp': 0}
 
-p_key, pkb = encode_private_key(settings.PRIVATE_KEY)
+p_key, pkb = encode_private_key(settings.PRIVATE_USER_KEY)
 
 
 def snowflake_session():

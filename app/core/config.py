@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     
     SNOWFLAKE_ACCOUNT: str
     SNOWFLAKE_PROJECT_USER: str
-    PRIVATE_KEY: str # PEM string
+    PRIVATE_USER_KEY: str # PEM string
 
     # Timeouts & limits
     SQL_TIMEOUT_SEC: int = 30

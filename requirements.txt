@@ -1,0 +1,11 @@
+aiohttp==3.11.11
+cryptography==40.0.2
+fastapi==0.116.1
+pandas==2.3.2
+pydantic==2.11.7
+pydantic_settings==2.10.1
+PyJWT==2.10.1
+snowflake_connector_python==3.17.1
+snowflake_ml_python==1.11.0
+snowflake_snowpark_python==1.36.0
+uvicorn==0.34.0

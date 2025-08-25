@@ -11,6 +11,7 @@ def encode_private_key(key:str):
         p_key: cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey - The private key
         pkb: bytes - The private key in DER format
     """
+    key=base64.b64decode(key).decode("utf-8")
     p_key= serialization.load_pem_private_key(
     key.encode("utf-8"),
     password=None
