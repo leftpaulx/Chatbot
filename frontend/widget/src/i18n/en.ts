@@ -1,0 +1,16 @@
+export const en = {
+  welcomeTitle: "How can I help you today?",
+  welcomeSubtitle: "Ask me anything about your business data.",
+  inputPlaceholder: "Type your message\u2026",
+  send: "Send",
+  newChat: "New conversation",
+  aiDisclaimer: "AI-generated response \u2014 verify important details independently",
+  errorGeneric: "Something went wrong. Please try again.",
+  errorConnection: "Connection lost. Retrying\u2026",
+  errorRateLimit: "Too many requests. Please wait a moment.",
+  retry: "Retry",
+  copyMessage: "Copy",
+  copied: "Copied!",
+  thinking: "Thinking\u2026",
+  onlineStatus: "Online",
+} as const;

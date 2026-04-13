@@ -1,17 +1,15 @@
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 
+
 class Chat(BaseModel):
-    """
-    The chat message model for the history
-    """
     role: Literal['system', 'user', 'assistant'] = Field(..., description="The role of the message")
-    message: str = Field(..., description="The content of the message, only user and assistant text messages are needed")
+    message: str = Field(..., description="The content of the message")
+
 
 class ChatRequest(BaseModel):
-    """
-    The main chat request model
-    """
-    prompt: str = Field(..., description="The prompt to send to the chatbot")
-    brand: str = Field(..., description="The brandcode to guardrail data")
-    history: Optional[list[Chat]] = Field(None, description="The history of the chat, markdown events are not needed")
+    prompt: str = Field(..., min_length=1, max_length=4000, description="The prompt to send to the chatbot")
+    brand: str = Field(..., min_length=1, max_length=100, description="Brand code sent by the embedding portal")
+    thread_id: Optional[str] = Field(None, max_length=64, description="Cortex Agent thread ID for conversation continuity")
+    parent_message_id: Optional[int] = Field(None, ge=0, description="Last assistant message ID in the thread (0 for first message)")
+    history: Optional[list[Chat]] = Field(None, description="Deprecated: threads now handle conversation history server-side")

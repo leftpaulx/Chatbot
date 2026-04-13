@@ -1,19 +1,125 @@
 import asyncio
+import json
+import logging
+from typing import Optional
+
+import aiohttp
 from snowflake.snowpark import Session
 from snowflake.cortex import complete
-import aiohttp
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+#  Thread management (Cortex Agent Threads API)
+# ---------------------------------------------------------------------------
+
+async def create_thread(jwt_token: str, snowflake_account: str) -> str:
+    """Create a new Cortex Agent thread. Returns the thread ID as a string."""
+    url = f"https://{snowflake_account}.snowflakecomputing.com/api/v2/cortex/threads"
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
+        "Content-Type": "application/json",
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url, headers=headers, json={"origin_application": "ob_chatbot"}
+        ) as resp:
+            body = await resp.text()
+            if resp.status != 200:
+                raise RuntimeError(f"Thread creation failed ({resp.status}): {body}")
+            # API may return a bare ID string or a full JSON object
+            try:
+                data = json.loads(body)
+                if isinstance(data, dict):
+                    return str(data["thread_id"])
+                return str(data)
+            except (json.JSONDecodeError, KeyError):
+                return body.strip().strip('"')
+
+
+# ---------------------------------------------------------------------------
+#  Agent Object streaming (new API)
+# ---------------------------------------------------------------------------
+
+async def cortex_agent_stream(
+    jwt_token: str,
+    snowflake_account: str,
+    prompt: str,
+    thread_id: Optional[str] = None,
+    parent_message_id: int = 0,
+):
+    """Stream SSE events from the Cortex Agent Object API.
+
+    Uses the agent-object endpoint so tools, model, and instructions are
+    configured on the PROFITABILITY_AGENT object — not in the request body.
+    When a thread_id is supplied the agent continues the threaded conversation.
+    """
+    url = f"https://{snowflake_account}.snowflakecomputing.com{settings.AGENT_PATH}"
+
+    payload: dict = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}],
+            }
+        ],
+    }
+
+    if thread_id is not None:
+        payload["thread_id"] = int(thread_id)
+        payload["parent_message_id"] = parent_message_id
+
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+
+    timeout = aiohttp.ClientTimeout(total=settings.AGENT_TIMEOUT_SEC)
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(
+                url, headers=headers, json=payload, timeout=timeout
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    yield {"event": "error", "data": f"HTTP {resp.status}: {body}"}
+                    return
+
+                event_type, data_buf = None, None
+                async for raw_bytes in resp.content:
+                    for chunk in raw_bytes.splitlines():
+                        line = chunk.decode("utf-8")
+                        if line == "":
+                            if data_buf is not None:
+                                yield {"event": event_type, "data": data_buf}
+                                event_type, data_buf = None, None
+                            continue
+                        if line.startswith("event: "):
+                            event_type = line[7:]
+                        elif line.startswith("data: "):
+                            piece = line[6:]
+                            data_buf = piece if data_buf is None else data_buf + "\n" + piece
+
+                # flush any trailing event
+                if data_buf is not None:
+                    yield {"event": event_type, "data": data_buf}
+
+        except asyncio.TimeoutError:
+            yield {"event": "error", "data": "Agent call timed out"}
+
+
+# ---------------------------------------------------------------------------
+#  Legacy utilities (kept for optional direct-query use outside the agent)
+# ---------------------------------------------------------------------------
 
 async def execute_sql_async(sql: str, session: Session, max_rows: int = 1000):
-    """
-    Execute a SQL query asynchronously (runs blocking Snowflake query in a thread).
-    Args:
-        sql: str - The SQL query to execute
-        session: snowflake.snowpark.Session - The Snowflake session
-        max_rows: int - The maximum number of rows to return
-    Returns:
-        df: pandas.DataFrame | str - Result dataframe or error string
-    """
-        # Offload the blocking Snowflake call to a thread
     df = await asyncio.to_thread(
         lambda: session.sql(sql.replace(";", "")).limit(max_rows).to_pandas()
     )
@@ -21,73 +127,6 @@ async def execute_sql_async(sql: str, session: Session, max_rows: int = 1000):
 
 
 async def cortex_complete_async(prompt: str, session: Session) -> str:
-    """
-    Offload the synchronous Snowflake Cortex Complete() call. This can be replaced with any other LLM.
-    Args:
-        prompt: str - The prompt to send to the chatbot
-        session: snowflake.snowpark.Session - The Snowflake session
-    Returns:
-        response: str - The response from the chatbot
-    """
-    return await asyncio.to_thread(lambda: complete('claude-3-5-sonnet', prompt, session=session))
-
-
-async def cortex_agent_stream(jwt_token:str,snowflake_account:str, prompt:str):
-    url = f"https://{snowflake_account}.snowflakecomputing.com/api/v2/cortex/agent:run"
-    payload = {
-    "model": "claude-3-5-sonnet",
-    "response_instruction": 'You should always be friendly and helpful',
-    "messages": [          
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": prompt
-                }
-            ]
-        }
-    ],
-    "tools": [
-        {
-            "tool_spec": {
-                "type": "cortex_analyst_text_to_sql",
-                "name": "analyze_data"
-            }
-        }
-        
-    ],
-    "tool_resources": {
-        "analyze_data": {"semantic_model_file": "@OB_AI.CHATBOT.APP/client_analytics.yaml"}
-    }
-    } 
-    headers = {
-        "Authorization": f"Bearer {jwt_token}",
-        "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
-        "Content-Type": "application/json"
-    }
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    # surface the upstream error as an SSE error event
-                    yield {"event": "error", "data": f"HTTP {resp.status}: {body}"}
-                    return
-                event, data = None, None
-                async for raw_bytes in resp.content:
-                    for ch in raw_bytes.splitlines():
-                        line = ch.decode("utf-8")
-                        if line == "": # if the line is empty (end of an event), yield the data and reset the event and data
-                            if data:
-                                yield {"event": event, "data": data}
-                                event, data = None, None
-                            continue
-                        if line.startswith("event: "):
-                            event = line[7:]
-                        elif line.startswith("data: "):
-                            data = line[6:]
-                if data: # in case the last line is not empty, yield the data
-                    yield {"event": event, "data": data}
-        except asyncio.TimeoutError:
-            yield {"event": "error", "data": 'Agent Call Timed Out!'}
+    return await asyncio.to_thread(
+        lambda: complete("claude-sonnet-4-5", prompt, session=session)
+    )

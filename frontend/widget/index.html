@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chatbot Widget – Dev Harness</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #F1F5F9;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .portal-sim { text-align: center; }
+    .portal-sim h2 {
+      margin-bottom: 16px;
+      color: #334155;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #chat-container { width: 420px; height: 640px; }
+  </style>
+</head>
+<body>
+  <div class="portal-sim">
+    <h2>Admin Portal (Simulated)</h2>
+    <div id="chat-container"></div>
+  </div>
+  <script type="module">
+    import { ChatbotWidget } from './src/index.ts';
+
+    ChatbotWidget.init({
+      mountElement: '#chat-container',
+      apiBaseUrl: 'http://localhost:8000',
+      getAccessToken: async () => 'test-dev-key-12345',
+      brand: 'gamersupps',
+      brandDisplayName: 'Gamersupps',
+      assistantName: 'OB Analyst',
+      brandPrimaryColor: '#2563EB',
+      startOpen: true,
+      suggestedPrompts: [
+        'What was our revenue last month?',
+        'Show me top markets by AOV',
+        'Compare Q1 vs Q2 performance',
+      ],
+    });
+  </script>
+</body>
+</html>
