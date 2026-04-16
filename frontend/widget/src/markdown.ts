@@ -11,6 +11,7 @@ export function renderMarkdown(text: string): string {
   raw = raw.replace(/([^\n\s])([\n]?)([-*] \*\*)/g, "$1\n$3");
   raw = raw.replace(/([^\n])(#{1,4} )/g, "$1\n$2");
   raw = raw.replace(/([^\n\s*])(\*\*[A-Z])/g, "$1\n$2");
+  raw = raw.replace(/([^\n\s])(\d+\.\s)/g, "$1\n$2");
 
   const codeBlocks: string[] = [];
   let src = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, code) => {
@@ -30,9 +31,7 @@ export function renderMarkdown(text: string): string {
 
   const lines = src.split("\n");
   const out: string[] = [];
-  let inList = false;
-  let listTag = "";
-  let curDepth = 0;
+  const listStack: string[] = [];
 
   let i = 0;
   while (i < lines.length) {
@@ -84,20 +83,32 @@ export function renderMarkdown(text: string): string {
 
     const bullet = t.match(/^[-*•]\s*(.+)$/);
     if (bullet) {
+      const cleaned = cleanStrayMarkers(bullet[1]);
+      if (isStandaloneLabel(cleaned) && depth0(lines[i])) {
+        closeList();
+        out.push(`<p class="cb-sublabel">${stripTrailingColon(cleaned)}:</p>`);
+        i++;
+        continue;
+      }
       const depth = indentDepth(lines[i]);
-      openList("ul");
-      adjustDepth(depth);
-      out.push(`<li>${cleanStrayMarkers(bullet[1])}</li>`);
+      ensureList("ul", depth);
+      out.push(`<li>${autoStrongLabel(cleaned)}</li>`);
       i++;
       continue;
     }
 
     const num = t.match(/^\d+\.\s+(.+)$/);
     if (num) {
+      const cleaned = cleanStrayMarkers(num[1]);
+      if (isStandaloneLabel(cleaned) && depth0(lines[i])) {
+        closeList();
+        out.push(`<p class="cb-sublabel">${stripTrailingColon(cleaned)}:</p>`);
+        i++;
+        continue;
+      }
       const depth = indentDepth(lines[i]);
-      openList("ol");
-      adjustDepth(depth);
-      out.push(`<li>${cleanStrayMarkers(num[1])}</li>`);
+      ensureList("ol", depth);
+      out.push(`<li>${autoStrongLabel(cleaned)}</li>`);
       i++;
       continue;
     }
@@ -123,36 +134,34 @@ export function renderMarkdown(text: string): string {
   );
   return html;
 
-  function openList(tag: string) {
-    if (inList && listTag !== tag) closeList();
-    if (!inList) {
-      out.push(`<${tag}>`);
-      inList = true;
-      listTag = tag;
-      curDepth = 0;
+  function ensureList(tag: string, depth: number) {
+    while (listStack.length > depth + 1) {
+      out.push(`</${listStack.pop()!}>`);
     }
-  }
 
-  function adjustDepth(target: number) {
-    while (curDepth < target) {
-      out.push(`<${listTag} class="cb-nested">`);
-      curDepth++;
+    if (listStack.length === depth + 1 && listStack[listStack.length - 1] !== tag) {
+      out.push(`</${listStack.pop()!}>`);
+      const cls = listStack.length > 0 ? ' class="cb-nested"' : "";
+      out.push(`<${tag}${cls}>`);
+      listStack.push(tag);
+      return;
     }
-    while (curDepth > target) {
-      out.push(`</${listTag}>`);
-      curDepth--;
+
+    if (listStack.length === depth + 1) return;
+
+    if (listStack.length === 0) {
+      out.push(`<${tag}>`);
+      listStack.push(tag);
+    }
+    while (listStack.length < depth + 1) {
+      out.push(`<${tag} class="cb-nested">`);
+      listStack.push(tag);
     }
   }
 
   function closeList() {
-    if (inList) {
-      while (curDepth > 0) {
-        out.push(`</${listTag}>`);
-        curDepth--;
-      }
-      out.push(`</${listTag}>`);
-      inList = false;
-      listTag = "";
+    while (listStack.length > 0) {
+      out.push(`</${listStack.pop()!}>`);
     }
   }
 }
@@ -165,9 +174,59 @@ function indentDepth(line: string): number {
   return 0;
 }
 
-/** Strip orphaned leading asterisks that aren't part of bold/italic pairs. */
+/**
+ * Strip orphaned * / ** markers left after inline bold/italic replacement.
+ * By this point matched pairs are already <strong>/<em> tags, so any
+ * remaining boundary asterisks are stray.
+ */
 function cleanStrayMarkers(content: string): string {
-  return content.replace(/^\*(?![*\s])/, "").replace(/^\*\s/, "");
+  content = content.replace(/^\*{1,2}\s*/, "");
+  content = content.replace(/\s*\*{1,2}$/, "");
+  return content;
+}
+
+/**
+ * True if the text is a short standalone label ending with a colon
+ * (e.g. "Recommendation:", "Business Insight:", "**Key Takeaway**:").
+ * These should break out of the surrounding list and render as a subtitle.
+ */
+function isStandaloneLabel(content: string): boolean {
+  const stripped = content
+    .replace(/<\/?strong>/g, "")
+    .replace(/<\/?em>/g, "")
+    .trim();
+  return /^[A-Z][A-Za-z0-9]*(\s+[A-Za-z0-9]+){0,4}:\s*$/.test(stripped);
+}
+
+function stripTrailingColon(content: string): string {
+  return content.replace(/:\s*$/, "");
+}
+
+function depth0(line: string): boolean {
+  return indentDepth(line) === 0;
+}
+
+/**
+ * Auto-bold list items that look like standalone labels / subtitles
+ * (e.g. "Business Insight:", "Key Takeaway:") when the LLM omits ** markers.
+ * Skips items that already contain HTML formatting.
+ */
+function autoStrongLabel(html: string): string {
+  if (/<[a-z]/.test(html)) return html;
+  const trimmed = html.trim();
+
+  // Standalone label: 1–5 words ending with ':'
+  if (/^[A-Z]\S*(\s+\S+){0,4}:\s*$/.test(trimmed)) {
+    return `<strong>${trimmed}</strong>`;
+  }
+
+  // Label + description: "Key Point: longer text here…" (1–2 title-case words)
+  const m = trimmed.match(/^([A-Z][a-zA-Z]{2,}(?:\s+[A-Z][a-zA-Z]+)?:)\s+(.+)$/);
+  if (m) {
+    return `<strong>${m[1]}</strong> ${m[2]}`;
+  }
+
+  return html;
 }
 
 function isTableRow(line: string): boolean {
@@ -193,7 +252,19 @@ function buildTable(rows: string[]): string {
   const colCount = headers.length;
   const dataRows = meaningful.slice(1);
 
-  let html = '<div class="cb-table-wrap"><table class="cb-table"><thead><tr>';
+  let html =
+    '<div class="cb-table-wrap">' +
+    '<div class="cb-table-toolbar">' +
+    '<button type="button" class="cb-table-export" title="Export as CSV">' +
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>' +
+    '<polyline points="7 10 12 15 17 10"/>' +
+    '<line x1="12" y1="15" x2="12" y2="3"/>' +
+    "</svg>" +
+    "<span>Export CSV</span>" +
+    "</button>" +
+    "</div>" +
+    '<table class="cb-table"><thead><tr>';
   for (const h of headers) {
     html += `<th>${h}</th>`;
   }

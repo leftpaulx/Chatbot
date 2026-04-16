@@ -169,6 +169,51 @@ export class Widget {
     this.bubbleBtn.addEventListener("click", () => {
       this.toggleOpen(true);
     });
+
+    this.messageListEl.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      const exportBtn = target.closest(".cb-table-export") as HTMLElement | null;
+      if (!exportBtn) return;
+      const wrap = exportBtn.closest(".cb-table-wrap");
+      const table = wrap?.querySelector("table.cb-table") as HTMLTableElement | null;
+      if (table) this.exportTableAsCsv(table);
+    });
+  }
+
+  private exportTableAsCsv(table: HTMLTableElement): void {
+    const rows: string[][] = [];
+    table.querySelectorAll("tr").forEach((tr) => {
+      const cells: string[] = [];
+      tr.querySelectorAll("th, td").forEach((cell) => {
+        cells.push((cell.textContent || "").trim());
+      });
+      if (cells.length) rows.push(cells);
+    });
+
+    const csv = rows
+      .map((r) => r.map((c) => this.csvEscape(c)).join(","))
+      .join("\r\n");
+
+    // Prepend UTF-8 BOM so Excel opens it with proper encoding.
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chatbot-table-${stamp}.csv`;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  private csvEscape(value: string): string {
+    if (/[",\r\n]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
   }
 
   /* ------------------------------------------------------------------ */
