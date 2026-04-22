@@ -23,7 +23,16 @@ export function renderMarkdown(text: string): string {
   raw = raw.replace(/([^\n\s])([\n]?)([-*] \*\*)/g, "$1\n$3");
   raw = raw.replace(/([^\n])(#{1,4} )/g, "$1\n$2");
   raw = raw.replace(/([^\n\s*])(\*\*[A-Z])/g, "$1\n$2");
-  raw = raw.replace(/([^\n\s])(\d+\.\s)/g, "$1\n$2");
+  // Insert a newline before an inline ordered-list marker ("foo1. Bar" ->
+  // "foo\n1. Bar"). The lookbehind excludes digits so we don't split years
+  // like "March 2026." into "March 2\n026." — the original bug was that
+  // `\d+\.\s` matched the "026. " tail with "2" as the preceding char.
+  raw = raw.replace(/([^\n\s\d])(\d{1,2}\.\s)/g, "$1\n$2");
+  // Bullet content sometimes runs into the next paragraph without any
+  // whitespace ("(full month)Since your..."). A closing paren immediately
+  // followed by a capitalised word is virtually never valid prose, so use
+  // it as a paragraph-break signal.
+  raw = raw.replace(/(\))([A-Z][a-z])/g, "$1\n\n$2");
 
   const codeBlocks: string[] = [];
   let src = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, code) => {
