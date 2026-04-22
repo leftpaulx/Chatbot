@@ -98,6 +98,12 @@ async def cortex_agent_stream(
                         line = chunk.decode("utf-8")
                         if line == "":
                             if data_buf is not None:
+                                logger.debug(
+                                    "cortex.sse_event type=%s data_len=%d preview=%s",
+                                    event_type,
+                                    len(data_buf),
+                                    (data_buf[:200] + "...") if len(data_buf) > 200 else data_buf,
+                                )
                                 yield {"event": event_type, "data": data_buf}
                                 event_type, data_buf = None, None
                             continue
@@ -109,6 +115,10 @@ async def cortex_agent_stream(
 
                 # flush any trailing event
                 if data_buf is not None:
+                    logger.debug(
+                        "cortex.sse_event type=%s data_len=%d (trailing)",
+                        event_type, len(data_buf),
+                    )
                     yield {"event": event_type, "data": data_buf}
 
         except asyncio.TimeoutError:

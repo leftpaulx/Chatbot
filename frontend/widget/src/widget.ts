@@ -1,6 +1,7 @@
-import type { WidgetConfig, ChatMessage, ThreadContext } from "./types";
+import type { WidgetConfig, ChatMessage, ThreadContext, ChartPayload } from "./types";
 import { streamChat } from "./stream-client";
 import { renderMarkdown } from "./markdown";
+import { renderVegaChart } from "./chart";
 import { en } from "./i18n/en";
 import styles from "./styles/widget.css?inline";
 import logoUrl from "../brand_assets/OpenBorder_Logo.jpeg";
@@ -16,10 +17,16 @@ const NEW_CHAT_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none
 const MINIMIZE_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
 const BUBBLE_SVG = `<svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M14.187 8.096L15 5.25 15.813 8.096a4.5 4.5 0 003.09 3.091L21.75 12l-2.846.813a4.5 4.5 0 00-3.091 3.091L15 18.75l-.813-2.846a4.5 4.5 0 00-3.091-3.091L8.25 12l2.846-.813a4.5 4.5 0 003.091-3.091zM7.5 4.259l.413 1.445a2.5 2.5 0 001.717 1.717L11.075 7.834 9.63 8.247a2.5 2.5 0 00-1.717 1.717L7.5 11.409l-.413-1.445a2.5 2.5 0 00-1.717-1.717L3.925 7.834 5.37 7.421a2.5 2.5 0 001.717-1.717L7.5 4.259zM7.5 17.259l.413 1.445a2.5 2.5 0 001.717 1.717l1.445.413-1.445.413a2.5 2.5 0 00-1.717 1.717L7.5 24.409l-.413-1.445a2.5 2.5 0 00-1.717-1.717L3.925 20.834l1.445-.413a2.5 2.5 0 001.717-1.717L7.5 17.259z"/></svg>`;
 
+type TextSegment = { type: "text"; id: string; content: string };
+type ChartSegment = { type: "chart"; id: string; spec: string };
+type Segment = TextSegment | ChartSegment;
+
 export class Widget {
   private config: WidgetConfig;
   private shadow: ShadowRoot;
   private messages: ChatMessage[] = [];
+  /** Stream-ordered text/chart segments per assistant message. */
+  private segmentsByMessage = new Map<string, Segment[]>();
   private isStreaming = false;
   private abortController: AbortController | null = null;
 
@@ -300,8 +307,22 @@ export class Widget {
             this.addMessage(assistantMsg);
             placed = true;
           }
-          assistantMsg.content += evt.data;
-          this.updateBubble(assistantMsg.id, assistantMsg.content);
+          this.appendText(assistantMsg, evt.data);
+          continue;
+        }
+
+        if (evt.event === "chart") {
+          this.typingEl.classList.add("cb-hidden");
+          if (!placed) {
+            this.addMessage(assistantMsg);
+            placed = true;
+          }
+          try {
+            const payload: ChartPayload = JSON.parse(evt.data);
+            this.appendChart(assistantMsg, payload);
+          } catch {
+            /* ignore malformed chart payload */
+          }
         }
       }
 
@@ -392,12 +413,93 @@ export class Widget {
     return wrapper;
   }
 
-  private updateBubble(id: string, content: string): void {
-    const el = this.shadow.querySelector(`[data-message-id="${id}"] .cb-bubble`);
-    if (el) {
-      el.innerHTML = renderMarkdown(content);
-      this.scrollToBottom();
+  /**
+   * Append a text delta to the assistant bubble, preserving stream order with
+   * any preceding chart segments. Consecutive text deltas accumulate into the
+   * same segment; a delta that arrives after a chart starts a new segment
+   * positioned below that chart.
+   */
+  private appendText(msg: ChatMessage, text: string): void {
+    if (!text) return;
+    msg.content += text; // flat text for copy / retry
+
+    const segs = this.segmentsByMessage.get(msg.id) ?? [];
+    this.segmentsByMessage.set(msg.id, segs);
+
+    const bubble = this.shadow.querySelector(
+      `[data-message-id="${msg.id}"] .cb-bubble`,
+    ) as HTMLElement | null;
+    if (!bubble) return;
+
+    const last = segs[segs.length - 1];
+    if (last && last.type === "text") {
+      last.content += text;
+      const segEl = bubble.querySelector(
+        `[data-seg-id="${last.id}"]`,
+      ) as HTMLElement | null;
+      if (segEl) segEl.innerHTML = renderMarkdown(last.content);
+    } else {
+      const seg: TextSegment = { type: "text", id: uid(), content: text };
+      segs.push(seg);
+      const el = document.createElement("div");
+      el.className = "cb-bubble-text";
+      el.dataset.segId = seg.id;
+      el.innerHTML = renderMarkdown(text);
+      bubble.appendChild(el);
     }
+    this.scrollToBottom();
+  }
+
+  /**
+   * Append a chart segment at the current stream position. Subsequent text
+   * deltas will appear below this chart rather than merging into the previous
+   * text block.
+   */
+  private appendChart(msg: ChatMessage, payload: ChartPayload): void {
+    const messageEl = this.shadow.querySelector(
+      `[data-message-id="${msg.id}"]`,
+    ) as HTMLElement | null;
+    const bubble = messageEl?.querySelector(".cb-bubble") as HTMLElement | null;
+    if (!messageEl || !bubble) return;
+
+    // Let the message expand to full width so the chart isn't squeezed.
+    messageEl.classList.add("cb-has-chart");
+
+    const segs = this.segmentsByMessage.get(msg.id) ?? [];
+    this.segmentsByMessage.set(msg.id, segs);
+
+    const seg: ChartSegment = { type: "chart", id: uid(), spec: payload.chart_spec };
+    segs.push(seg);
+
+    const wrap = document.createElement("div");
+    wrap.className = "cb-chart-wrap";
+    wrap.dataset.segId = seg.id;
+
+    const chartEl = document.createElement("div");
+    chartEl.className = "cb-chart";
+    wrap.appendChild(chartEl);
+
+    const loading = document.createElement("div");
+    loading.className = "cb-chart-loading";
+    loading.textContent = "Rendering chart\u2026";
+    wrap.appendChild(loading);
+
+    bubble.appendChild(wrap);
+    this.scrollToBottom();
+
+    const theme = this.config.theme === "dark" ? "dark" : "light";
+    renderVegaChart(chartEl, payload.chart_spec, theme)
+      .then(() => {
+        loading.remove();
+        this.scrollToBottom();
+      })
+      .catch((err) => {
+        loading.remove();
+        const fallback = document.createElement("div");
+        fallback.className = "cb-chart-error";
+        fallback.textContent = `Chart could not be rendered: ${(err as Error).message}`;
+        wrap.appendChild(fallback);
+      });
   }
 
   private showStatus(text: string): void {
@@ -482,6 +584,7 @@ export class Widget {
     this.threadId = null;
     this.parentMessageId = null;
     this.messages = [];
+    this.segmentsByMessage.clear();
 
     // Remove all message elements (keep welcome + typing indicator)
     this.shadow
@@ -502,6 +605,7 @@ export class Widget {
     this.abortController?.abort();
     this.threadId = null;
     this.parentMessageId = null;
+    this.segmentsByMessage.clear();
     while (this.shadow.firstChild) {
       this.shadow.removeChild(this.shadow.firstChild);
     }

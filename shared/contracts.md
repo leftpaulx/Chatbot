@@ -11,14 +11,14 @@ Shared specification between the backend (`app/`) and the widget (`frontend/widg
 | Header | Value |
 |--------|-------|
 | `Content-Type` | `application/json` |
-| `Authorization` | `Bearer <JWT>` (must contain `brand` claim) |
+| `Authorization` | `Bearer <API_KEY>` |
 
 ### Request Body
 
 ```json
 {
   "prompt": "string (required)",
-  "brand": "string (optional – overridden by JWT claim)",
+  "brand": "string (required)",
   "thread_id": "string (optional – omit for first message)",
   "parent_message_id": 0
 }
@@ -58,6 +58,20 @@ event: text
 data: Based on the data, your AOV last month was
 ```
 
+### `chart`
+
+A chart produced by the Cortex Agent (Vega-Lite v5). The widget renders
+the spec inline in the current assistant bubble, below any streamed text.
+Multiple `chart` events may be emitted per response (one per agent chart).
+
+```
+event: chart
+data: {"tool_use_id":"toolu_123","chart_spec":"{\"$schema\":\"https://vega.github.io/schema/vega-lite/v5.json\",...}"}
+```
+
+`chart_spec` is the raw Vega-Lite specification as a JSON string, forwarded
+verbatim from the agent's `response.chart` event.
+
 ### `thread`
 
 Thread context for conversation continuity. Sent once, before `done`.
@@ -92,9 +106,10 @@ data: [Done]
 
 1. One or more `markdown` events (status updates during processing)
 2. Zero or more `text` events (answer tokens — streamed progressively)
-3. Exactly one `thread` event (thread context for follow-up messages)
-4. Zero or more `error` events
-5. Exactly one `done` event (terminal)
+3. Zero or more `chart` events (Vega-Lite specs, interleaved with `text`)
+4. Exactly one `thread` event (thread context for follow-up messages)
+5. Zero or more `error` events
+6. Exactly one `done` event (terminal)
 
 ## Wire Format
 
@@ -110,4 +125,6 @@ with **server-managed threads**. This means:
 
 - **Tools, model, and instructions** are configured on the `PROFITABILITY_AGENT` object — not in the request body.
 - **Conversation history** is managed server-side via threads — the widget does not send chat history.
+- **Authentication** uses a shared Bearer API key validated by the backend.
+- **Brand context** is supplied by the widget in the request body.
 - **SQL execution and response generation** are handled entirely by the agent — the backend only relays events.

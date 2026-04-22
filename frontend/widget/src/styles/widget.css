@@ -861,6 +861,82 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* ---- Charts (Vega-Lite) ------------------------------------------ */
+/* Assistant messages that contain a chart expand to use the full column
+   width so charts have enough room for axes, title, and legend. */
+.cb-message--assistant.cb-has-chart {
+  max-width: 100%;
+  width: 100%;
+}
+
+.cb-has-chart .cb-bubble {
+  width: 100%;
+}
+
+.cb-chart-wrap {
+  /* Break out of the bubble's inner padding so the plot area can use the
+     full bubble width — critical on narrow (mobile / compact) layouts. */
+  margin: 12px -14px 4px;
+  padding: 12px 14px 8px;
+  border-top: 1px solid var(--cb-border);
+  border-bottom: 1px solid var(--cb-border);
+  background: var(--cb-surface);
+  overflow: hidden;
+  position: relative;
+}
+
+.cb-chart-wrap:last-child {
+  margin-bottom: -10px;
+  padding-bottom: 12px;
+  border-bottom: none;
+  border-bottom-left-radius: var(--cb-radius);
+}
+
+.cb-chart {
+  width: 100%;
+  min-height: 260px;
+  display: block;
+}
+
+.cb-chart svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* vega-embed injects an action menu in the top-right corner; keep it subtle */
+.cb-chart-wrap .vega-embed {
+  width: 100%;
+}
+.cb-chart-wrap .vega-embed summary {
+  opacity: 0.5;
+  transition: opacity var(--cb-transition);
+}
+.cb-chart-wrap .vega-embed:hover summary {
+  opacity: 1;
+}
+
+.cb-chart-loading {
+  padding: 24px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--cb-text-secondary);
+  letter-spacing: -0.05px;
+}
+
+.cb-chart-error {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--cb-error);
+  background: var(--cb-error-bg);
+  border-radius: 6px;
+}
+
+.cb-dark .cb-chart-wrap {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
 /* ---- Compact mode ------------------------------------------------ */
 .cb-compact .cb-header {
   padding: 10px 14px;

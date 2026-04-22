@@ -30,6 +30,23 @@ def snowflake_session():
     session = Session.builder.configs(conn_params).create() 
     return session
 
+
+def bind_brand_to_snowflake_session(session: Session, brand: str) -> None:
+    """Set Snowflake session variable ``brand`` for row-level guardrails.
+
+    Matches the legacy pattern ``SET brand = '<code>'`` so policies and views
+    that read ``$brand`` / session context see the portal brand for this
+    connection. Escapes single quotes in ``brand`` for safe string literals.
+
+    Note: Cortex Agent SQL runs in Snowflake's warehouse session over the REST
+    API; this binding applies to queries executed on *this* Snowpark session
+    during the same request (and keeps parity with any future in-process SQL).
+    """
+    if not brand or not isinstance(brand, str):
+        raise ValueError("brand is required")
+    escaped = brand.replace("'", "''")
+    session.sql(f"SET brand = '{escaped}'").collect()
+
 async def get_jwt_cached_async() -> str:   # caching the jwt token
     """
     Get a JWT token and cache it

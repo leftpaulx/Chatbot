@@ -1,82 +1,64 @@
-# Deployment Guide — OB Chatbot
+# Deployment Guide - OB Chatbot
 
-Single-EC2 deployment using Docker Compose with Nginx reverse proxy and TLS.
+This project now deploys as a **single application container**. The Docker image builds the widget, serves it from `/widget/`, and exposes the FastAPI API from the same process on port `8000`.
 
----
+That means production only needs one app container:
 
-## Prerequisites
+- API: `/chat`
+- Health check: `/health`
+- Widget assets: `/widget/`
 
-- An AWS account with EC2 access.
-- A domain name (or subdomain) you can point to the EC2 instance.
-- Your `.env` values ready (Snowflake credentials, JWT keys, etc.). See `.env.example`.
+## Overview
 
----
+The production flow is:
 
-## 1. Launch an EC2 Instance
+1. Provision a host or container platform.
+2. Put the app's `.env` on that host.
+3. Build the Docker image from this repo.
+4. Run a single container that exposes port `8000`.
+5. Terminate TLS outside the container if you need HTTPS.
 
-### Recommended specs
+## 1. Prerequisites
 
-| Setting | Value |
-|---------|-------|
-| Instance type | **t3.medium** (2 vCPU, 4 GB RAM) |
-| AMI | Ubuntu 22.04 LTS or Amazon Linux 2023 |
-| Storage | 20 GB gp3 (minimum) |
-| Key pair | Create or select an existing SSH key pair |
+- A Linux host, VM, or container platform with Docker available
+- Snowflake credentials ready in `.env`
+- A shared `API_KEY` for the widget to send as `Authorization: Bearer <API_KEY>`
+- Optional: a domain name if you want to expose the app publicly
 
-### Security Group rules
+If you are deploying on EC2, a `t3.medium` with 20 GB of storage is enough for a first production host.
 
-| Type | Protocol | Port | Source | Purpose |
-|------|----------|------|--------|---------|
-| SSH | TCP | 22 | **Your IP only** | Remote access |
-| HTTP | TCP | 80 | 0.0.0.0/0 | Redirect to HTTPS + ACME challenges |
-| HTTPS | TCP | 443 | 0.0.0.0/0 | Application traffic |
-| All traffic | All | All | **Outbound** | Snowflake API access |
+## 2. Network and DNS
 
-### Elastic IP
+### If you are testing directly on the host
 
-1. Go to **EC2 > Elastic IPs > Allocate Elastic IP address**.
-2. Associate it with your instance.
-3. Note the IP -- you'll need it for DNS.
+Open:
 
----
+- `22/tcp` from your IP only for SSH
+- `8000/tcp` from your IP or trusted office/VPN ranges
 
-## 2. DNS Configuration
+### If you are putting TLS in front of the app
 
-Create an **A record** pointing your domain (e.g., `chatbot.yourdomain.com`) to the Elastic IP.
+Expose:
 
-If using Route 53, create a hosted zone and add the record there. If using an external registrar, add the A record in their DNS panel. DNS propagation can take up to 24 hours, but usually resolves within minutes.
+- `22/tcp` from your IP only for SSH
+- `80/tcp` and `443/tcp` on the reverse proxy or load balancer
+- `8000/tcp` only between that proxy/load balancer and the app host
 
----
+Point your DNS record to the host or load balancer that fronts the container.
 
-## 3. Server Provisioning
+## 3. Install Docker
 
-SSH into your instance:
+Example for Ubuntu:
 
 ```bash
-ssh -i your-key.pem ubuntu@<ELASTIC_IP>
-```
-
-### 3.1 Install Docker
-
-```bash
-# Update packages
 sudo apt-get update && sudo apt-get upgrade -y
-
-# Install Docker
 curl -fsSL https://get.docker.com | sudo sh
-
-# Add your user to the docker group (avoids needing sudo for docker commands)
 sudo usermod -aG docker $USER
-
-# Apply group change (or log out and back in)
 newgrp docker
-
-# Verify
 docker --version
-docker compose version
 ```
 
-### 3.2 Clone the Repository
+## 4. Clone the Repository
 
 ```bash
 cd ~
@@ -84,245 +66,207 @@ git clone <YOUR_REPO_URL> chatbot
 cd chatbot
 ```
 
-### 3.3 Configure Environment
+## 5. Configure Environment
 
 ```bash
 cp .env.example .env
-nano .env   # fill in all required values
+nano .env
 ```
 
-Required values you must set:
-- `SNOWFLAKE_ACCOUNT` -- your Snowflake account identifier
-- `SNOWFLAKE_PROJECT_USER` -- the service user
-- `PRIVATE_USER_KEY` -- base64-encoded PEM private key (single line, no headers)
-- `ALLOWED_ORIGINS` -- the origin(s) where the widget will be embedded
-- `JWT_PUBLIC_KEY` -- base64-encoded PEM public key from the admin portal (required for production auth)
+Required production values:
 
----
+- `SNOWFLAKE_ACCOUNT`
+- `SNOWFLAKE_PROJECT_USER`
+- `PRIVATE_USER_KEY`
+- `API_KEY`
 
-## 4. TLS Certificate Setup
+Common optional values:
 
-### Option A: Let's Encrypt (recommended for production)
+- `ALLOWED_ORIGINS`
+- `AGENT_PATH`
+- `AGENT_TIMEOUT_SEC`
+- `MAX_CONCURRENCY`
+- `RATE_LIMIT_RPM`
+- `LOG_LEVEL`
+- `LOG_FORMAT`
 
-First, create the directory structure and get an initial certificate:
+For same-origin production, `ALLOWED_ORIGINS` can simply be your app domain, for example `https://chatbot.yourdomain.com`.
+
+## 6. Build the Image
 
 ```bash
-# Create certbot directories
-mkdir -p certbot/conf certbot/www
-
-# Get the initial certificate using standalone mode (before nginx starts)
-sudo docker run --rm -p 80:80 \
-  -v $(pwd)/certbot/conf:/etc/letsencrypt \
-  -v $(pwd)/certbot/www:/var/www/certbot \
-  certbot/certbot certonly \
-    --standalone \
-    -d chatbot.yourdomain.com \
-    --email you@yourdomain.com \
-    --agree-tos \
-    --no-eff-email
+docker build -t ob-chatbot .
 ```
 
-The nginx config expects certs at `/etc/letsencrypt/live/default/`. Create a symlink:
+The Docker build does both of these steps for you:
+
+- Builds the widget from `frontend/widget/`
+- Copies the built assets into the Python runtime image so FastAPI can serve `/widget/`
+
+## 7. Run the Container
 
 ```bash
-sudo ln -s chatbot.yourdomain.com certbot/conf/live/default
+docker run -d \
+  --name ob-chatbot \
+  --restart unless-stopped \
+  --env-file .env \
+  -p 8000:8000 \
+  ob-chatbot
 ```
 
-### Option B: Self-signed (quick testing only)
+At this point:
+
+- `http://<host>:8000/health` should answer health checks
+- `http://<host>:8000/widget/` should serve the built frontend
+- `http://<host>:8000/chat` is the SSE chat endpoint
+
+## 8. HTTPS / Reverse Proxy Options
+
+The container itself only serves plain HTTP on port `8000`. For production HTTPS, terminate TLS outside the container.
+
+Good options:
+
+- AWS Application Load Balancer
+- Nginx on the host
+- Caddy on the host
+- Cloudflare Tunnel or another edge proxy
+
+The important part is that both of these paths route to the same container:
+
+- `/chat`
+- `/widget/`
+
+Because the widget and API come from the same app container, the recommended production widget config is:
+
+```javascript
+ChatbotWidget.init({
+  mountElement: "#chat-container",
+  apiBaseUrl: window.location.origin,
+  getAccessToken: async () => window.__CHATBOT_API_KEY__,
+  brand: "your-brand-code",
+});
+```
+
+## 9. Verify the Deployment
+
+Run these checks on the host first:
 
 ```bash
-mkdir -p certbot/conf/live/default
-
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout certbot/conf/live/default/privkey.pem \
-  -out certbot/conf/live/default/fullchain.pem \
-  -subj "/CN=localhost"
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/widget/
 ```
 
-### Option C: HTTP only (earliest testing)
+Expected health response:
 
-If you just want to test without TLS at all, use the dev compose file:
+```json
+{"status":"ok","jwt_cached":true}
+```
+
+If you placed TLS in front, also verify through the public URL:
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d --build
-# App available at http://<ELASTIC_IP>:8000
+curl https://chatbot.yourdomain.com/health
+curl https://chatbot.yourdomain.com/widget/
 ```
 
-Skip to section 6 for verification.
-
----
-
-## 5. Start the Application
-
-```bash
-# Build and start all services
-docker compose up -d --build
-
-# Verify all containers are running
-docker compose ps
-```
-
-You should see:
-- `app` -- healthy
-- `nginx` -- running
-
-To also enable automatic TLS renewal:
-
-```bash
-docker compose --profile tls up -d
-```
-
----
-
-## 6. Verify
-
-```bash
-# Health check
-curl -k https://chatbot.yourdomain.com/health
-
-# Expected response:
-# {"status":"ok","jwt_cached":true}
-
-# Test the widget is served
-curl -k https://chatbot.yourdomain.com/widget/
-```
-
----
-
-## 7. Day-to-Day Operations
+## 10. Day-to-Day Operations
 
 ### View logs
 
 ```bash
-# Application logs (real-time)
-docker compose logs -f app
-
-# Nginx access/error logs
-docker compose logs -f nginx
-
-# Last 100 lines from the app
-docker compose logs --tail 100 app
+docker logs -f ob-chatbot
+docker logs --tail 100 ob-chatbot
 ```
-
-### Update the application
-
-```bash
-cd ~/chatbot
-git pull
-docker compose up -d --build
-```
-
-Docker Compose rebuilds only what changed. The widget is rebuilt inside the Docker build stage automatically.
 
 ### Restart
 
 ```bash
-docker compose restart app          # restart just the app
-docker compose restart              # restart everything
+docker restart ob-chatbot
 ```
 
 ### Stop
 
 ```bash
-docker compose down                 # stop and remove containers
-docker compose down -v              # also remove volumes
+docker stop ob-chatbot
+docker rm ob-chatbot
 ```
 
 ### Check resource usage
 
 ```bash
-docker stats                        # live CPU/memory per container
-df -h                               # disk space
+docker stats
+df -h
 ```
 
----
+## 11. Update the Application
 
-## 8. Updating the .env
+```bash
+cd ~/chatbot
+git pull
+docker build -t ob-chatbot .
+docker stop ob-chatbot
+docker rm ob-chatbot
+docker run -d \
+  --name ob-chatbot \
+  --restart unless-stopped \
+  --env-file .env \
+  -p 8000:8000 \
+  ob-chatbot
+```
 
-If you change environment variables:
+The widget is rebuilt automatically during the Docker image build, so there is no separate frontend deploy step.
+
+## 12. Update the Environment
+
+If `.env` changes:
 
 ```bash
 nano .env
-docker compose up -d                # recreates containers with new env
+docker stop ob-chatbot
+docker rm ob-chatbot
+docker run -d \
+  --name ob-chatbot \
+  --restart unless-stopped \
+  --env-file .env \
+  -p 8000:8000 \
+  ob-chatbot
 ```
 
----
+## 13. Troubleshooting
 
-## 9. TLS Certificate Renewal
+### Container exits immediately
 
-If using Let's Encrypt with the `tls` profile, the certbot container auto-renews every 12 hours. To manually trigger renewal:
+Check the logs:
 
 ```bash
-docker compose --profile tls run --rm certbot renew
-docker compose restart nginx
+docker logs ob-chatbot
 ```
 
----
+The most common cause is a missing or malformed required environment variable.
 
-## 10. Troubleshooting
+### `/health` returns degraded
 
-### App won't start
+The container is up, but Snowflake auth or configuration failed. Re-check:
+
+- `SNOWFLAKE_ACCOUNT`
+- `SNOWFLAKE_PROJECT_USER`
+- `PRIVATE_USER_KEY`
+
+### Widget loads but chat calls return `401`
+
+The widget is sending the wrong Bearer token. Make sure the value returned by `getAccessToken()` matches the server-side `API_KEY` exactly.
+
+### Browser shows CORS errors
+
+If the widget is served from the same origin as the API, use `apiBaseUrl: window.location.origin`.
+
+If you intentionally run the widget from a different origin in development, add that origin to `ALLOWED_ORIGINS`.
+
+### Widget route returns `404`
+
+The image was likely not rebuilt after frontend changes. Rebuild the Docker image and restart the container:
 
 ```bash
-docker compose logs app             # check for Python/config errors
-docker compose exec app env         # verify env vars are loaded
+docker build -t ob-chatbot .
+docker restart ob-chatbot
 ```
-
-### 502 Bad Gateway from Nginx
-
-The app container isn't healthy yet. Wait for the health check to pass:
-
-```bash
-docker compose ps                   # check health status
-docker compose logs app             # check for startup errors
-```
-
-### SSE streaming not working
-
-Verify Nginx is not buffering:
-- The `/chat` location block in `nginx/nginx.conf` has `proxy_buffering off`.
-- `proxy_read_timeout` should be >= `AGENT_TIMEOUT_SEC` (default 300s).
-
-### Can't connect to Snowflake
-
-- Verify the Security Group allows all outbound traffic.
-- Check `SNOWFLAKE_ACCOUNT` format -- should be like `xy12345.us-east-1`.
-- Check `PRIVATE_USER_KEY` is properly base64-encoded.
-
----
-
-## 11. Migration to Managed AWS
-
-When the eng team is ready for a more robust deployment, here's the migration path. The stateless container architecture maps directly to managed services:
-
-| Current (EC2) | Target (Managed AWS) |
-|---------------|---------------------|
-| Docker Compose on EC2 | **ECS Fargate** or **EKS** (no servers to manage) |
-| Nginx on EC2 | **Application Load Balancer** (ALB) with ACM certificate |
-| `.env` file on disk | **AWS Secrets Manager** or **SSM Parameter Store** |
-| `docker compose logs` | **CloudWatch Container Insights** or Datadog |
-| Manual `git pull` + rebuild | **CI/CD** via GitHub Actions deploying to **ECR** + ECS |
-| Single EC2 instance | **ECS Service auto-scaling** (min 2, scale on CPU) |
-| Elastic IP | **Route 53 alias** to ALB |
-| In-memory rate limiter | **AWS WAF** rate-based rules or **API Gateway** |
-| Self-managed TLS | **ACM** (free, auto-renewing certs on ALB) |
-
-### Key migration steps
-
-1. **Push container image to ECR**: The same Dockerfile works -- just push to a private ECR repository instead of building on the EC2 instance.
-
-2. **Create an ECS Fargate service**: Define a task definition referencing the ECR image, with environment variables from Secrets Manager. Set desired count to 2+ for availability.
-
-3. **Replace Nginx with ALB**: Create an ALB with an HTTPS listener (ACM cert). The ALB target group points to the ECS service. ALB natively supports SSE (just set idle timeout >= 300s).
-
-4. **CI/CD pipeline**: GitHub Actions workflow that builds, pushes to ECR, and updates the ECS service on every push to `main`.
-
-5. **DNS**: Switch the A record (or Route 53 alias) from the Elastic IP to the ALB DNS name.
-
-### What stays the same
-
-- The Docker image (same Dockerfile, same `app/` code)
-- The FastAPI application code
-- The widget build process
-- The SSE protocol and Snowflake integration
-- The health check endpoint (ALB uses `/health` as its target group health check)

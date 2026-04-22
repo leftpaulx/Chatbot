@@ -4,10 +4,22 @@
  * bullet lists (nested), numbered lists, links, and line breaks.
  */
 
+// Decorative bullet glyphs the LLM likes to emit instead of "-" / "*".
+// Covers: U+2022 •, U+2713 ✓, U+2714 ✔, U+25AA ▪, U+25B8 ▸, U+25BA ►,
+// U+2043 ⁃, U+2219 ∙, U+00B7 ·, U+25CF ●, U+25E6 ◦.
+const BULLET_GLYPHS = "\u2022\u2713\u2714\u25AA\u25B8\u25BA\u2043\u2219\u00B7\u25CF\u25E6";
+const BULLET_GLYPH_CLASS = `[${BULLET_GLYPHS}]`;
+const BULLET_INLINE_RE = new RegExp(`([^\\n\\s])(${BULLET_GLYPH_CLASS}\\s)`, "g");
+const BULLET_AFTER_COLON_RE = new RegExp(`(:)(${BULLET_GLYPH_CLASS})`, "g");
+const BULLET_LINE_RE = new RegExp(`^[-*${BULLET_GLYPHS}]\\s*(.+)$`);
+
 export function renderMarkdown(text: string): string {
   // ---- Pre-process: normalise line breaks the agent sometimes omits ----
   let raw = text;
-  raw = raw.replace(/([^\n])•/g, "$1\n•");
+  // Break a decorative bullet off the previous word ("April—✓ Next").
+  raw = raw.replace(BULLET_INLINE_RE, "$1\n$2");
+  // Break a bullet that's glued to a trailing colon ("Key Insights:✓").
+  raw = raw.replace(BULLET_AFTER_COLON_RE, "$1\n$2 ");
   raw = raw.replace(/([^\n\s])([\n]?)([-*] \*\*)/g, "$1\n$3");
   raw = raw.replace(/([^\n])(#{1,4} )/g, "$1\n$2");
   raw = raw.replace(/([^\n\s*])(\*\*[A-Z])/g, "$1\n$2");
@@ -81,7 +93,7 @@ export function renderMarkdown(text: string): string {
       continue;
     }
 
-    const bullet = t.match(/^[-*•]\s*(.+)$/);
+    const bullet = t.match(BULLET_LINE_RE);
     if (bullet) {
       const cleaned = cleanStrayMarkers(bullet[1]);
       if (isStandaloneLabel(cleaned) && depth0(lines[i])) {

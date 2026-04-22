@@ -26,8 +26,14 @@ export interface ChatMessage {
 }
 
 export interface SSEEvent {
-  event: "markdown" | "text" | "error" | "done" | "thread";
+  event: "markdown" | "text" | "chart" | "error" | "done" | "thread";
   data: string;
+}
+
+export interface ChartPayload {
+  tool_use_id?: string;
+  /** Vega-Lite specification serialized as a JSON string. */
+  chart_spec: string;
 }
 
 export interface ThreadContext {
