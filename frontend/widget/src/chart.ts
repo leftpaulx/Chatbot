@@ -3,32 +3,14 @@
  *
  * The Cortex Agents Run API emits `response.chart` events whose `chart_spec`
  * is a Vega-Lite v5 specification (serialized as a JSON string). We render
- * them with `vega-embed`, which is lazy-loaded from a CDN the first time a
- * chart is encountered so the widget bundle stays small for text-only usage.
+ * them with `vega-embed`, which is dynamically imported on first use so the
+ * ~260 KB gzipped plotting runtime doesn't load for text-only conversations.
+ *
+ * Bundled locally (no CDN) so the widget works in production environments
+ * with strict CSP or outbound-network restrictions.
  *
  * Reference: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-run
  */
-
-// vega-embed's split build expects vega + vega-lite to be present as globals,
-// so load the three scripts in order. Pinned major versions keep the bundle
-// reproducible while still picking up patch fixes.
-const SCRIPTS: { src: string; tag: string; check: () => boolean }[] = [
-  {
-    src: "https://cdn.jsdelivr.net/npm/vega@5",
-    tag: "cb-vega",
-    check: () => typeof (window as any).vega !== "undefined",
-  },
-  {
-    src: "https://cdn.jsdelivr.net/npm/vega-lite@5",
-    tag: "cb-vega-lite",
-    check: () => typeof (window as any).vegaLite !== "undefined",
-  },
-  {
-    src: "https://cdn.jsdelivr.net/npm/vega-embed@6",
-    tag: "cb-vega-embed",
-    check: () => typeof window.vegaEmbed !== "undefined",
-  },
-];
 
 type VegaEmbedFn = (
   el: HTMLElement,
@@ -36,68 +18,16 @@ type VegaEmbedFn = (
   opts?: Record<string, unknown>,
 ) => Promise<unknown>;
 
-declare global {
-  interface Window {
-    vegaEmbed?: VegaEmbedFn;
-  }
-}
-
 let loader: Promise<VegaEmbedFn> | null = null;
 
-function loadScript(src: string, tag: string, check: () => boolean): Promise<void> {
-  if (check()) return Promise.resolve();
-
-  return new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[data-cb="${tag}"]`,
-    );
-    const done = () => {
-      if (check()) resolve();
-      else reject(new Error(`${tag} loaded but global not present`));
-    };
-    if (existing) {
-      if (check()) return resolve();
-      existing.addEventListener("load", done, { once: true });
-      existing.addEventListener(
-        "error",
-        () => reject(new Error(`${tag} failed to load`)),
-        { once: true },
-      );
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = false; // preserve execution order for the chain
-    script.dataset.cb = tag;
-    script.addEventListener("load", done, { once: true });
-    script.addEventListener(
-      "error",
-      () => reject(new Error(`${tag} failed to load`)),
-      { once: true },
-    );
-    document.head.appendChild(script);
-  });
-}
-
 function loadVegaEmbed(): Promise<VegaEmbedFn> {
-  if (window.vegaEmbed) return Promise.resolve(window.vegaEmbed);
   if (loader) return loader;
-
-  loader = (async () => {
-    for (const s of SCRIPTS) {
-      await loadScript(s.src, s.tag, s.check);
-    }
-    if (!window.vegaEmbed) {
-      throw new Error("vega-embed loaded but global is missing");
-    }
-    return window.vegaEmbed;
-  })();
-
-  // Reset the loader on failure so a subsequent chart can retry.
-  loader.catch(() => {
-    loader = null;
-  });
-
+  loader = import("vega-embed")
+    .then((mod) => (mod.default ?? (mod as unknown)) as VegaEmbedFn)
+    .catch((err) => {
+      loader = null; // allow retry on the next chart
+      throw err;
+    });
   return loader;
 }
 
